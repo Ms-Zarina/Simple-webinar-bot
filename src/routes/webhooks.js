@@ -30,7 +30,7 @@ router.post('/admin/mark-attendance', async (req, res) => {
 
 router.post('/landing/register', async (req, res) => {
   // MVP: лендинг должен передать telegramId после перехода пользователя в бот.
-  // Если лендинг только собирает телефон/email, нужна отдельная схема deep-link start payload.
+  // Если лендинг собирает только телефон/email, нужна отдельная deep-link схема.
   const schema = z.object({ telegramId: z.number() });
   const { telegramId } = schema.parse(req.body);
   await bot.telegram.sendMessage(telegramId, 'Регистрация получена. Бот активирован.');

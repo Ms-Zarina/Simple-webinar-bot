@@ -26,6 +26,7 @@ function buildRedisUrl(config) {
 
 const normalizedEnv = {
   ...rawEnv,
+  SCHEDULE_TEST_MODE: pick(rawEnv.SCHEDULE_TEST_MODE, 'false'),
   DATABASE_HOST: pick(rawEnv.DATABASE_HOST, rawEnv.POSTGRES_HOST, rawEnv.PGHOST, 'localhost'),
   DATABASE_PORT: pick(rawEnv.DATABASE_PORT, rawEnv.POSTGRES_PORT, rawEnv.PGPORT, '5432'),
   DATABASE_USER: pick(rawEnv.DATABASE_USER, rawEnv.POSTGRES_USER, rawEnv.PGUSER, 'simple'),
@@ -43,6 +44,10 @@ normalizedEnv.REDIS_URL = pick(rawEnv.REDIS_URL, buildRedisUrl(normalizedEnv));
 const schema = z.object({
   NODE_ENV: z.string().default('development'),
   PORT: z.coerce.number().default(3000),
+  SCHEDULE_TEST_MODE: z
+    .string()
+    .transform((value) => ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()))
+    .default('false'),
   PUBLIC_URL: z.string().url(),
   BOT_TOKEN: z.string().min(10),
   DATABASE_HOST: z.string().min(1),
