@@ -1,6 +1,40 @@
 import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
+import { existsSync } from 'fs';
+import { dirname, join, extname } from 'path';
+import { fileURLToPath } from 'url';
 import { env } from '../config/env.js';
+
+// Scheduled messages can carry an optional local media file from src/assets
+// (e.g. the lecturer voice on Day 4, or the gift PDF). The file is resolved at
+// SEND time, so a manager can swap the file any time before it goes out. If the
+// file is missing, the worker falls back to the plain text message — never fails.
+const assetsDir = join(dirname(fileURLToPath(import.meta.url)), '../assets');
+
+async function deliverJob(bot, { telegramId, text, options, media }) {
+  if (media && media.asset) {
+    const filePath = join(assetsDir, media.asset);
+    if (existsSync(filePath)) {
+      const extra = text ? { caption: text } : {};
+      const ext = extname(media.asset).toLowerCase();
+      try {
+        if (media.kind === 'document') return await bot.telegram.sendDocument(telegramId, { source: filePath }, extra);
+        if (media.kind === 'photo') return await bot.telegram.sendPhoto(telegramId, { source: filePath }, extra);
+        if (media.kind === 'audio') return await bot.telegram.sendAudio(telegramId, { source: filePath }, extra);
+        if (media.kind === 'voice') {
+          // True voice bubble needs OGG/OPUS; other formats go as an audio track.
+          if (ext === '.ogg' || ext === '.oga') return await bot.telegram.sendVoice(telegramId, { source: filePath }, extra);
+          return await bot.telegram.sendAudio(telegramId, { source: filePath }, extra);
+        }
+      } catch (error) {
+        console.warn(`[scheduler] media send failed asset=${media.asset}: ${error.message}; falling back to text`);
+      }
+    } else {
+      console.warn(`[scheduler] media asset not found: ${media.asset}; sending text only`);
+    }
+  }
+  return bot.telegram.sendMessage(telegramId, text, options || {});
+}
 
 let connection = null;
 let messageQueue = null;
@@ -61,20 +95,19 @@ export async function startMessageWorker(bot) {
   if (!queue) return null;
 
   messageWorker = new Worker('telegram-messages', async (job) => {
-    const { telegramId, text, options } = job.data;
-    await bot.telegram.sendMessage(telegramId, text, options || {});
+    await deliverJob(bot, job.data);
   }, { connection });
 
   messageWorker.on('error', logRedisUnavailable);
   return messageWorker;
 }
 
-export async function scheduleMessage({ telegramId, text, delayMs = 0, options = {} }) {
+export async function scheduleMessage({ telegramId, text, delayMs = 0, options = {}, media = null }) {
   const queue = await createQueue();
   if (!queue) return false;
 
   try {
-    await queue.add('send-message', { telegramId, text, options }, { delay: delayMs, attempts: 3, backoff: { type: 'exponential', delay: 3000 } });
+    await queue.add('send-message', { telegramId, text, options, media }, { delay: delayMs, attempts: 3, backoff: { type: 'exponential', delay: 3000 } });
     return true;
   } catch (error) {
     redisUnavailable = true;
