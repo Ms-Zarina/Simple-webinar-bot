@@ -35,7 +35,7 @@ const normalizedEnv = {
   ZOOM_ACCOUNT_ID: pick(rawEnv.ZOOM_ACCOUNT_ID, ''),
   ZOOM_CLIENT_ID: pick(rawEnv.ZOOM_CLIENT_ID, ''),
   ZOOM_CLIENT_SECRET: pick(rawEnv.ZOOM_CLIENT_SECRET, ''),
-  ZOOM_MEETING_TYPE: pick(rawEnv.ZOOM_MEETING_TYPE, 'meeting'),
+  ZOOM_MEETING_TYPE: pick(rawEnv.ZOOM_MEETING_TYPE, rawEnv.ZOOM_TYPE, 'meeting'),
   ZOOM_MEETING_ID: pick(rawEnv.ZOOM_MEETING_ID, ''),
   ZOOM_ATTENDANCE_MINUTES: pick(rawEnv.ZOOM_ATTENDANCE_MINUTES, '1'),
   ZOOM_TIMEOUT_MS: pick(rawEnv.ZOOM_TIMEOUT_MS, '15000'),
@@ -70,7 +70,7 @@ const schema = z.object({
     .string()
     .transform((value) => ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()))
     .default('false'),
-  PUBLIC_URL: z.string().url(),
+  PUBLIC_URL: z.string().trim().url(),
   BOT_TOKEN: z.string().min(10),
   GOOGLE_SHEETS_WEBHOOK_URL: z.string().optional().default(''),
   GOOGLE_SHEETS_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
@@ -123,3 +123,53 @@ const schema = z.object({
 });
 
 export const env = schema.parse(normalizedEnv);
+
+// Production-only startup validation. In production a missing connection string or
+// secret should fail fast with a clear, secret-free list — not boot a half-broken
+// service. Local/dev (NODE_ENV !== 'production') is unaffected. DATABASE_URL /
+// REDIS_URL are accepted as full alternatives to the split host/port vars.
+function validateProductionEnv(e) {
+  if (e.NODE_ENV !== 'production') return;
+
+  const missing = [];
+  const need = (key, present) => {
+    if (!present) missing.push(key);
+  };
+
+  need('BOT_TOKEN', e.BOT_TOKEN);
+  need('PUBLIC_URL', e.PUBLIC_URL);
+  need('GOOGLE_SHEETS_WEBHOOK_URL', e.GOOGLE_SHEETS_WEBHOOK_URL);
+  need('DATABASE_ENABLED=true', e.DATABASE_ENABLED);
+
+  // DB: a provided DATABASE_URL satisfies all the split vars at once.
+  if (e.DATABASE_ENABLED && !rawEnv.DATABASE_URL) {
+    need('DATABASE_HOST (or DATABASE_URL)', e.DATABASE_HOST);
+    need('DATABASE_PORT (or DATABASE_URL)', e.DATABASE_PORT);
+    need('DATABASE_USER (or DATABASE_URL)', e.DATABASE_USER);
+    need('DATABASE_NAME (or DATABASE_URL)', e.DATABASE_NAME);
+  }
+
+  // Redis: a provided REDIS_URL satisfies host/port at once.
+  if (!rawEnv.REDIS_URL) {
+    need('REDIS_HOST (or REDIS_URL)', e.REDIS_HOST);
+    need('REDIS_PORT (or REDIS_URL)', e.REDIS_PORT);
+  }
+
+  if (e.ZOOM_ENABLED) {
+    need('ZOOM_ACCOUNT_ID', e.ZOOM_ACCOUNT_ID);
+    need('ZOOM_CLIENT_ID', e.ZOOM_CLIENT_ID);
+    need('ZOOM_CLIENT_SECRET', e.ZOOM_CLIENT_SECRET);
+    need('ZOOM_MEETING_ID', e.ZOOM_MEETING_ID);
+    need('ZOOM_MEETING_TYPE (or ZOOM_TYPE)', e.ZOOM_MEETING_TYPE);
+  }
+
+  if (missing.length) {
+    throw new Error(
+      '[config] Missing required production environment variables:\n  - ' +
+        missing.join('\n  - ') +
+        '\nSet them in Render → Environment, then redeploy. (Secrets are never printed.)'
+    );
+  }
+}
+
+validateProductionEnv(env);

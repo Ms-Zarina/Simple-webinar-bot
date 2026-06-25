@@ -2,14 +2,166 @@
 
 Telegram bot for the webinar funnel: registration, warmup messages, webinar-day reminders, offer broadcast, follow-up, and reactivation.
 
-## Quick Start
+## Quick Start (local development)
+
+> Production runs on Render — see **[Deploy to Render](#deploy-to-render-production)**.
+> ngrok is **local development only**.
 
 ```bash
 cp .env.example .env
+# For local dev, set in .env:
+#   NODE_ENV=development
+#   TELEGRAM_WEBHOOK_ENABLED=false
+#   PUBLIC_URL=https://<your-ngrok-url>.ngrok-free.dev
+#   ZOOM_ENABLED=false        # unless you are testing Zoom
 npm install
 npm run db:migrate
 npm run dev
 ```
+
+Local Telegram webhook delivery needs a public HTTPS tunnel (local dev only):
+
+```bash
+# Forward your ngrok tunnel to the same PORT as in .env
+ngrok http --url=<your-reserved-domain> 3199
+```
+
+## Production Deployment (Render)
+
+The bot runs 24/7 on Render — **no laptop and no ngrok required**.
+
+- Live URL: `https://simple-webinar-bot.onrender.com`
+- Health: `https://simple-webinar-bot.onrender.com/health`
+- Webhook (auto): `https://simple-webinar-bot.onrender.com/webhook/telegram`
+- Webhook status (no token): `https://simple-webinar-bot.onrender.com/webhook/telegram/status`
+
+### Render service settings
+
+| Setting            | Value                  |
+| ------------------ | ---------------------- |
+| Runtime            | Node                   |
+| Build Command      | `npm install`          |
+| Start Command      | `npm run start:prod`   |
+| Health Check Path  | `/health`              |
+
+`npm run start:prod` runs idempotent DB migrations and then starts the server
+(`npm run db:migrate && node src/index.js`). **Do not hardcode `PORT`** — Render
+injects it and the app reads `process.env.PORT`.
+
+### Render Environment Variables
+
+**Required:**
+
+```env
+NODE_ENV=production
+PUBLIC_URL=https://simple-webinar-bot.onrender.com
+TELEGRAM_WEBHOOK_ENABLED=true
+TELEGRAM_DROP_PENDING_UPDATES=false
+```
+
+> `PORT` is provided by Render automatically — do not set it (the app reads
+> `process.env.PORT`). If you keep it in `.env` for local use, `PORT=10000` is fine.
+
+**Secrets:**
+
+```env
+BOT_TOKEN=<telegram bot token>
+GOOGLE_SHEETS_WEBHOOK_URL=https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec
+ADMIN_TELEGRAM_IDS=<comma-separated Telegram IDs allowed to run /send_offer>
+```
+
+**Zoom (set `ZOOM_ENABLED=true` and fill all):**
+
+```env
+ZOOM_ENABLED=true
+ZOOM_MEETING_TYPE=meeting        # or ZOOM_TYPE=meeting (accepted as an alias)
+ZOOM_ACCOUNT_ID=<...>
+ZOOM_CLIENT_ID=<...>
+ZOOM_CLIENT_SECRET=<...>
+ZOOM_MEETING_ID=<numeric id>
+ZOOM_ATTENDANCE_MINUTES=1
+```
+
+**PostgreSQL — prefer the single URL from Render PostgreSQL:**
+
+```env
+DATABASE_ENABLED=true
+DATABASE_URL=<Render PostgreSQL "Internal Database URL">
+```
+
+If you don't use `DATABASE_URL`, set the split vars instead:
+`DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USER`, `DATABASE_PASSWORD`, `DATABASE_NAME`.
+
+**Redis — prefer the single URL from Render Key Value (Redis):**
+
+```env
+REDIS_URL=<Render Redis "Internal URL">
+```
+
+Or the split vars: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB`.
+
+> `DATABASE_URL` / `REDIS_URL` take precedence over the split vars when present,
+> so the same code works on Render (URLs) and locally with Docker (split vars).
+
+### Deploy to Render (step by step)
+
+1. **Push code to GitHub.**
+2. Render → **New → Web Service**.
+3. **Connect** the GitHub repository.
+4. **Build Command:** `npm install`
+5. **Start Command:** `npm run start:prod`
+6. **Health Check Path:** `/health`
+7. Render → **New → PostgreSQL**; copy its **Internal Database URL**.
+8. Render → **New → Key Value** (Redis); copy its **Internal URL**.
+9. In the Web Service → **Environment**, add all variables above; set
+   `DATABASE_URL` and `REDIS_URL` to the values from steps 7–8.
+10. **Deploy** (Create Web Service / Manual Deploy).
+11. **Check Logs** — look for the success lines below.
+12. Open `https://simple-webinar-bot.onrender.com/health` → `{"ok":true,...}`.
+13. In Telegram send **/start** → welcome message + menu.
+14. Send **/zoom_status** → `Zoom: OK`.
+15. Send **/zoom_register_me** → you receive a personal Zoom join link.
+16. Check the **Google Sheet** → a row appears/updates for your Telegram ID.
+17. After the meeting ends, send **/sync_zoom_attendance** → counts + follow-ups.
+
+### Successful-startup logs
+
+```text
+Starting simple-webinar-bot (env=production) on port 10000
+Server listening on port 10000
+Public URL: https://simple-webinar-bot.onrender.com
+Telegram webhook: https://simple-webinar-bot.onrender.com/webhook/telegram
+Health check: https://simple-webinar-bot.onrender.com/health
+[google-sheets] webhook URL configured: https://script.google.com/.../exec
+[zoom] enabled type=meeting meetingId=... accountId=set clientId=set clientSecret=set attendanceMinutes=1
+[db] PostgreSQL connected at <host>:5432
+[scheduler] Redis connected at <host>:6379
+Telegram webhook: https://simple-webinar-bot.onrender.com/webhook/telegram
+simple-webinar-bot startup complete.
+```
+
+### Troubleshooting
+
+- **Bot does not answer** → open `/webhook/telegram/status`; the `url` must be the
+  `onrender.com` URL. If empty/old, redeploy (the webhook is set on startup) and
+  confirm `TELEGRAM_WEBHOOK_ENABLED=true`.
+- **Webhook still points to ngrok** → a local instance set it. Stop the local bot;
+  redeploy on Render to re-set the webhook. Telegram allows **one webhook per bot token**.
+- **Redis connection fails** → check `REDIS_URL` (use the Internal URL). Logs show
+  `[scheduler] Redis unavailable`. Scheduled drip messages won't fire until fixed.
+- **PostgreSQL connection fails** → check `DATABASE_URL` (Internal URL). Logs show
+  `[db] PostgreSQL unavailable`. The start command already runs migrations.
+- **Google Sheets does not write** → wrong `GOOGLE_SHEETS_WEBHOOK_URL` or an outdated
+  Apps Script deployment. The bot logs the HTTP response; the `/exec` must return
+  `{"ok":true,"action":...}`.
+- **Zoom token fails** → `/zoom_status` shows the error; verify the four Zoom
+  secrets and that the Server-to-Server app is activated.
+- **Render free tier sleeps** → after ~15 min idle the service sleeps; the first
+  request wakes it (a few seconds delay).
+
+> **For client testing tomorrow:** keep the Render service alive. On the free tier
+> the first request after sleep may be delayed by several seconds — use a paid
+> instance, or ping `/health` periodically to keep it warm during the test.
 
 ## How to edit webinar content (for the marketing team)
 
@@ -156,8 +308,10 @@ is unaffected.)
 
 ## Endpoints
 
+- `GET /health` - top-level healthcheck used by Render (`{ ok, service, environment, uptime }`)
 - `POST /webhook/telegram` - Telegram webhook
-- `GET /webhook/health` - healthcheck
+- `GET /webhook/telegram/status` - current Telegram webhook info (no `BOT_TOKEN` exposed)
+- `GET /webhook/health` - legacy healthcheck (`{ ok: true }`)
 - `POST /webhook/admin/broadcast-offer` - manual offer broadcast
 - `POST /webhook/admin/mark-attendance` - mark attendee/no-show
 - `POST /webhook/landing/register` - landing page webhook
@@ -314,9 +468,9 @@ ZOOM_ATTENDANCE_MINUTES=1
   - `no_show` — registered but not present in the report
   Then it syncs the attendance fields to Google Sheets.
 
-> Registrants are currently kept in memory (PostgreSQL is disabled), so run
-> `/sync_zoom_attendance` in the same process lifetime as the registrations, or
-> move the registry into the DB for durability.
+> Registrants are persisted in PostgreSQL (`users` table), so attendance
+> reconciliation survives restarts and deploys — run `/sync_zoom_attendance`
+> any time after the meeting ends. Requires `DATABASE_ENABLED=true`.
 
 ### 4. Diagnostic Commands
 
@@ -326,9 +480,7 @@ ZOOM_ATTENDANCE_MINUTES=1
   full `/start` -> goal -> level funnel. Registers the current Telegram user for
   the configured meeting and replies with the personal Zoom `join_url`. Google
   Sheets receives `Zoom Registrant ID` + `Zoom Join URL` for that user.
-  > Warning: the registrant is stored in memory, so it counts toward
-  > `/sync_zoom_attendance` only within the same bot process lifetime. If the bot
-  > restarts before you sync attendance, the registry is empty and the user
-  > cannot be reconciled.
+  > The registrant is persisted in PostgreSQL, so it counts toward
+  > `/sync_zoom_attendance` even after a restart or redeploy.
 - `/sync_zoom_attendance` — fetches the report, classifies attendance, and syncs
   to Google Sheets. Replies with per-status counts.

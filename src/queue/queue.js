@@ -116,6 +116,27 @@ export async function scheduleMessage({ telegramId, text, delayMs = 0, options =
   }
 }
 
+// Closes the BullMQ worker, queue, and Redis connection for graceful shutdown.
+// Safe to call once during SIGTERM/SIGINT; tolerant if Redis was never connected.
+export async function shutdownQueue() {
+  try {
+    if (messageWorker) {
+      await messageWorker.close();
+      messageWorker = null;
+    }
+    if (messageQueue) {
+      await messageQueue.close();
+      messageQueue = null;
+    }
+    if (connection) {
+      await connection.quit().catch(() => connection.disconnect());
+      connection = null;
+    }
+  } catch (error) {
+    console.warn(`[scheduler] shutdown error: ${error.message}`);
+  }
+}
+
 export async function broadcastNow(users, text) {
   let scheduled = 0;
   for (const user of users) {

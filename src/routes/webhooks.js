@@ -88,7 +88,7 @@ export async function setTelegramWebhook() {
     await bot.telegram.setWebhook(url, {
       drop_pending_updates: env.TELEGRAM_DROP_PENDING_UPDATES
     });
-    console.log(`Telegram webhook set: ${url}`);
+    console.log(`Telegram webhook: ${url}`);
   } catch (error) {
     if (error.message?.includes('ETIMEDOUT') || error.code === 'ETIMEDOUT') {
       console.error(`Telegram webhook setup timed out for ${url}. The bot keeps running; retry after network access to api.telegram.org is available. ${error.message}`);

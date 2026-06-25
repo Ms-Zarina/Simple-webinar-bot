@@ -1,0 +1,71 @@
+# Render Blueprint (optional convenience). The manual steps in README.md →
+# "Deploy to Render" are authoritative; this file just makes the setup
+# reproducible and auto-wires DATABASE_URL / REDIS_URL.
+#
+# Secrets are marked `sync: false` — Render will prompt for them in the dashboard
+# (they are NEVER committed here). Fill: BOT_TOKEN, GOOGLE_SHEETS_WEBHOOK_URL,
+# ADMIN_TELEGRAM_IDS, and the four ZOOM_* secrets.
+
+services:
+  - type: web
+    name: simple-webinar-bot
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run start:prod
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PUBLIC_URL
+        value: https://simple-webinar-bot.onrender.com
+      - key: TELEGRAM_WEBHOOK_ENABLED
+        value: "true"
+      - key: TELEGRAM_DROP_PENDING_UPDATES
+        value: "false"
+      - key: SCHEDULE_TEST_MODE
+        value: "false"
+      # PostgreSQL / Redis connection strings are injected from the resources below.
+      - key: DATABASE_ENABLED
+        value: "true"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: simple-webinar-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: simple-webinar-redis
+          property: connectionString
+      # Secrets — entered in the Render dashboard, not stored in git.
+      - key: BOT_TOKEN
+        sync: false
+      - key: GOOGLE_SHEETS_WEBHOOK_URL
+        sync: false
+      - key: ADMIN_TELEGRAM_IDS
+        sync: false
+      # Zoom
+      - key: ZOOM_ENABLED
+        value: "true"
+      - key: ZOOM_MEETING_TYPE
+        value: meeting
+      - key: ZOOM_ATTENDANCE_MINUTES
+        value: "1"
+      - key: ZOOM_ACCOUNT_ID
+        sync: false
+      - key: ZOOM_CLIENT_ID
+        sync: false
+      - key: ZOOM_CLIENT_SECRET
+        sync: false
+      - key: ZOOM_MEETING_ID
+        sync: false
+
+  - type: redis
+    name: simple-webinar-redis
+    plan: free
+    ipAllowList: [] # internal connections only (other Render services)
+
+databases:
+  - name: simple-webinar-db
+    plan: free
